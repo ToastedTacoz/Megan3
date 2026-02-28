@@ -5,8 +5,12 @@ local module = {}
 local kr  = 10
 local kr2 = kr
 local key = math.random(10*kr2,3000*kr2)/kr
-local cmb = {"q","w","@","^","S","g","f","j","s",":"}
+local cmb = {"q","w","@","^","S","g","f","j","n",":"}
 local e   = cmb[ math.floor((key % 1) * #cmb) + 1 ]
+
+function module.generateKey()
+    return (tostring(math.random(1111,9999)))..(string.rep(cmb[math.random(1,#cmb)],3))
+end
 
 local function printd(t)
     -- print(t)
@@ -97,15 +101,21 @@ local function decode_file(text)
     return t
 end
 
-local function infect_file(dir, passphrase)
-    local f = io.open(dir, "rb")
-    if not f then
-        printd("Read error")
-        return
-    end
+local function infect_file(dir, passphrase, text)
+    local original
+    
+    if not text then
+        local f = io.open(dir, "rb")
+        if not f then
+            printd("Read error")
+            return
+        end
 
-    local original = f:read("*a")
-    f:close()
+        original = f:read("*a")
+        f:close()
+    else
+        original = dir
+    end
 
     printd("Original:")
     printd(original)
@@ -114,27 +124,37 @@ local function infect_file(dir, passphrase)
 
     local amt = 1
     local infected = infectMn1(encrypted, amt, e)
-
-    local fw = io.open(dir, "wb")
-    if not fw then
-        printd("Write error")
-        return
+    
+    if not text then
+        local fw = io.open(dir, "wb")
+        if not fw then
+            printd("Write error")
+            return
+        end
+        fw:write(infected)
+        fw:close()
     end
-    fw:write(infected)
-    fw:close()
-
+    
     printd("\nFile encrypted.")
+    
+    if text then return infected end
 end
 
-local function decodeStep(dir, passphrase)
-    local f = io.open(dir,"rb")
-    if not f then
-        printd("Read error")
-        return
-    end
+local function decodeStep(dir, passphrase, isText)
+    local text = ""
+    
+    if not isText then
+        local f = io.open(dir,"rb")
+        if not f then
+            printd("Read error")
+            return
+        end
 
-    local text = f:read("*a")
-    f:close()
+        text = f:read("*a")
+        f:close()
+    else
+        text = dir
+    end
     
     local decoded = decode_file(text)
     if not decoded then
@@ -146,30 +166,44 @@ local function decodeStep(dir, passphrase)
 
     printd("\nDecoded:")
     printd(plain or "<nil>")
-
-    local f2 = io.open(dir,"wb")
-    if not f2 then
-        printd("Write error")
-        return nil
+    
+    if not text then
+        local f2 = io.open(dir,"wb")
+        if not f2 then
+            printd("Write error")
+            return nil
+        end
+        f2:write(plain)
+        f2:close()
     end
-    f2:write(plain)
-    f2:close()
+    
     return plain
 end
 
-local function killFile(dir, times, passphrase)
+local function killFile(dir, times, passphrase, text)
+    local d
+    
     for _ = 1, 1 + (times or 1) do
-        infect_file(dir, passphrase)
+        d = infect_file(dir, passphrase, text)
     end
+    
+    return d
 end
 
-local function decode(dir, passphrase)
+local function decode(dir, passphrase, text)
+    local d = true
+    local df = "This is already debugged!"
+    
     while true do
-        local d = decodeStep(dir, passphrase)
+        d = decodeStep(dir, passphrase, text)
         if not d then
             break
+        else
+            df = d
         end
     end
+    
+    return df
 end
 
 local function getFileExtension(filename)
@@ -208,13 +242,13 @@ local function get_child_files(path)
     return files
 end
 
-local function fileBit(dir, mode, p)
+local function fileBit(dir, mode, p, text)
     local passphrase = p.passphrase or "default-secret"
 
     if mode == 1 then
-        decode(dir, passphrase)
+        return decode(dir, passphrase, text)
     elseif mode == 2 then
-        killFile(dir, p.times or 1, passphrase)
+        return killFile(dir, p.times or 1, passphrase, text)
     end
 end
 
@@ -232,6 +266,10 @@ function module.process(dir, mode, p)
         printd2((string.upper(string.sub(ext,2,2))..string.sub(ext,3,#ext))..": "..dir)
         fileBit(dir, mode, p)
     end
+end
+
+function module.processText(text, mode, p)
+    return fileBit(text, mode, p, true)
 end
 
 return module
